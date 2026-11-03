@@ -264,6 +264,21 @@ void Aquamarine::CSessionDevice::resolveMatchingRenderNode(udev_device* cardDevi
                     continue;
                 }
                 renderNodeFd = open(fbDevnode, O_RDWR | O_CLOEXEC);
+                // Bun OS: vgem is a buffer-sharing stub with no renderer (WSL ships it next to vkms). Borrowing it as the
+                // render node of a KMS-only device makes every GBM allocation fail; render on the KMS node instead.
+                if (renderNodeFd >= 0) {
+                    drmVersion* ver = drmGetVersion(renderNodeFd);
+                    const bool  stub = ver && ver->name && strcmp(ver->name, "vgem") == 0;
+                    if (ver)
+                        drmFreeVersion(ver);
+                    if (stub) {
+                        session->backend->log(AQ_LOG_DEBUG, std::format("drm: {} is vgem (no renderer), using the KMS node of {} for rendering", fbDevnode, parentSyspath ? parentSyspath : "(unknown)"));
+                        close(renderNodeFd);
+                        renderNodeFd = -1;
+                        udev_device_unref(fbDev);
+                        break;
+                    }
+                }
                 if (renderNodeFd >= 0) {
                     session->backend->log(
                         AQ_LOG_WARNING,
